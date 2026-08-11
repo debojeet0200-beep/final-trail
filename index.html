@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Trailmark</title>
+<title>SquareUp</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -31,10 +31,20 @@
   }
   .app{max-width:720px;margin:0 auto;padding:32px 20px 80px;}
   h1,h2{font-family:'Fraunces',serif;margin:0;}
-  .brand{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:8px;}
+  .brand{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:12px;}
   .brand-name{font-size:26px;font-weight:600;letter-spacing:-0.01em;}
+  .app-brand{display:flex;align-items:center;gap:10px;}
+  .app-logo{width:52px;height:52px;display:block;flex:0 0 52px;object-fit:contain;}
+  .app-brand-name{font-family:'Fraunces',serif;font-size:36px;font-weight:600;letter-spacing:-0.02em;}
+  .group-header{position:relative;margin-bottom:28px;padding-right:150px;}
+  .group-title{font-family:'Fraunces',serif;font-size:38px;line-height:1.05;font-weight:600;letter-spacing:-0.025em;margin:0 0 10px;}
+  .group-brand{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;letter-spacing:0.06em;text-transform:uppercase;}
+  .group-brand .app-logo{width:52px;height:52px;flex-basis:52px;object-fit:contain;}
+  .group-brand .app-brand-name{font-family:'Fraunces',serif;font-size:31px;font-weight:500;letter-spacing:0.08em;}
+  .viewing-as{margin-top:8px;font-family:'Fraunces',serif;font-size:16px;font-weight:500;color:var(--muted);}
+
+  .join-card{max-width:430px;margin:0 auto 16px;}
   .brand-tag{font-size:12px;color:var(--muted);letter-spacing:0.04em;text-transform:uppercase;}
-  .whoami{font-size:13px;color:var(--moss);margin-top:6px;font-weight:600;}
   .contour{position:relative;height:1px;background:var(--line);margin:20px 0 28px;overflow:visible;}
   .contour svg{position:absolute;top:-9px;left:0;width:100%;height:18px;}
 
@@ -153,15 +163,15 @@ function showMsg(text){
 }
 
 let state = {
-  view: 'home',       // home | trip
+  view: 'home',
   code: null,
   trip: null,
   step: 'setup',
-  isAdmin: false,      // true only via the secret admin link
-  pinVerified: false,  // true once the trip PIN has been entered this session
-  myParticipantId: null, // which participant this device has claimed, this session
-  claimingId: null,    // participant currently showing an inline PIN-claim field
-  payingKey: null       // which settle-up row is currently showing the "pay with which app" choices
+  isAdmin: false,
+  pinVerified: false,
+  myParticipantId: null,
+  claimingId: null,
+  upiEditId: null
 };
 
 function shareLink(){
@@ -171,7 +181,7 @@ function adminLink(){
   return window.location.origin + window.location.pathname + '#' + state.code + '.' + state.trip.adminToken;
 }
 
-async function loadTrip(code){
+async function loadGroup(code){
   try{
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/trips?code=eq.${encodeURIComponent(code)}&select=data`,
@@ -190,7 +200,7 @@ async function loadTrip(code){
     return null;
   }
 }
-async function saveTrip(){
+async function saveGroup(){
   try{
     const res = await fetch(`${SUPABASE_URL}/rest/v1/trips`, {
       method: 'POST',
@@ -228,23 +238,38 @@ async function init(){
   if(raw){
     const [codePart, tokenPart] = raw.split('.');
     const code = codePart.toUpperCase();
-    const trip = await loadTrip(code);
+    const trip = await loadGroup(code);
     if(trip){
       state.code = code;
       state.trip = trip;
-      state.pinVerified = true;
-      state.view = 'trip';
       if(tokenPart && trip.adminToken && tokenPart === trip.adminToken){
         state.isAdmin = true;
+        state.pinVerified = true;
+        state.view = 'trip';
+      } else if(trip.pin){
+        state.view = 'pinGate';
+      } else {
+        state.pinVerified = true;
+        state.view = 'trip';
       }
     } else {
-      showMsg("That trip link doesn't seem to be valid anymore.");
+      showMsg("That group link doesn't seem to be valid anymore.");
     }
   }
   render();
 }
 
-// Instead of prompt(), claiming opens an inline PIN field next to that person's row.
+function verifyPin(pin){
+  if(pin && pin.trim() === state.trip.pin){
+    state.pinVerified = true;
+    state.view = 'trip';
+    window.location.hash = state.code;
+    render();
+  }else{
+    showMsg('Wrong PIN. Ask whoever created the group for the correct one.');
+  }
+}
+
 function startClaim(id){
   state.claimingId = id;
   render();
@@ -259,72 +284,157 @@ function confirmClaim(id, enteredPin){
   if(enteredPin && enteredPin.trim() === p.pin){
     state.myParticipantId = id;
     state.claimingId = null;
+    state.upiEditId = id;
     render();
   }else{
     showMsg('Wrong PIN for ' + p.name + '.');
   }
 }
 
-async function newTrip(name){
+async function newGroup(name, pin){
+  if(!pin || !/^\d{4}$/.test(pin.trim())){
+    showMsg('Set a 4-digit PIN for the group first.');
+    return;
+  }
   const code = genCode();
   const token = genToken();
   state.code = code;
-  state.trip = { name: name || 'Untitled trek', adminToken: token, participants: [], expenses: [] };
+  state.trip = {
+    name: name || 'Untitled group',
+    pin: pin.trim(),
+    adminToken: token,
+    participants: [],
+    expenses: []
+  };
   state.isAdmin = true;
   state.pinVerified = true;
   state.myParticipantId = null;
   state.view = 'trip';
   window.location.hash = code + '.' + token;
-  const ok = await saveTrip();
-  if(ok) showMsg('Trip created and saved — copy the link below to share it.');
+  const ok = await saveGroup();
+  if(ok) showMsg('Group created and saved. Copy the link below to share it.');
   render();
 }
 
-async function joinTrip(code){
+async function joinGroup(code){
   code = code.trim().toUpperCase();
-  if(!code){ showMsg('Type in a trip code first.'); return; }
-  const trip = await loadTrip(code);
-  if(!trip){ showMsg("Can't find a trip with that code. Check it and try again."); return; }
+  if(!code){
+    showMsg('Type in a group code first.');
+    return;
+  }
+  const trip = await loadGroup(code);
+  if(!trip){
+    showMsg("Can't find a group with that code. Check it and try again.");
+    return;
+  }
   state.code = code;
   state.trip = trip;
   state.isAdmin = false;
   state.myParticipantId = null;
   state.pinVerified = true;
-  state.view = 'trip';
+  state.view = 'joinMember';
   window.location.hash = code;
   render();
 }
 
-function addParticipant(nm, pin){
-  if(!nm.trim()) return;
-  if(!pin || !/^\d{4}$/.test(pin.trim())){
-    showMsg("Set a 4-digit PIN for this person — it's how they'll claim their name later to edit their own UPI ID.");
-    return;
+async function addParticipant(nm, pin, upi='', claimSelf=true){
+  nm = (nm || '').trim();
+  pin = (pin || '').trim();
+  upi = (upi || '').trim();
+
+  if(!nm){
+    showMsg('Enter a name first.');
+    return false;
   }
-  state.trip.participants.push({ id: Date.now()+''+Math.random(), name: nm.trim(), upi: '', pin: pin.trim() });
-  saveTrip(); render();
+
+  if(!/^\d{4}$/.test(pin)){
+    showMsg('Set a 4-digit PIN for this member.');
+    return false;
+  }
+
+  if(state.trip.participants.some(p=>p.name.trim().toLowerCase()===nm.toLowerCase())){
+    showMsg('That name is already in the group. Use your existing name and PIN to claim it.');
+    return false;
+  }
+
+  const id = Date.now()+''+Math.random();
+
+  state.trip.participants.push({
+    id,
+    name:nm,
+    upi,
+    pin
+  });
+
+  if(claimSelf) state.myParticipantId = id;
+
+  const ok = await saveGroup();
+
+  if(ok){
+    state.claimingId = null;
+    showMsg('You joined the group.');
+    render();
+  }
+
+  return ok;
 }
-function removeParticipant(id){
-  if(!state.isAdmin){ showMsg('Only the trip creator can remove people. Use the admin link.'); return; }
-  state.trip.participants = state.trip.participants.filter(p=>p.id!==id);
-  if(state.myParticipantId===id) state.myParticipantId = null;
-  saveTrip(); render();
-}
+
 async function setUpi(id, val){
-  if(!(state.isAdmin || state.myParticipantId===id)) return; // not your name to edit
+  if(!(state.isAdmin || state.myParticipantId===id)) return;
+
   const p = state.trip.participants.find(p=>p.id===id);
   if(!p) return;
-  const cleaned = val.trim();
-  if(cleaned && !/^[\w.\-]{2,}@[\w.\-]{2,}$/.test(cleaned)){
-    showMsg("That doesn't look like a valid UPI ID (e.g. name@bank).");
+
+  const upi = val.trim();
+
+  if(!upi){
+    showMsg('Enter a UPI ID first.');
     return;
   }
-  p.upi = cleaned;
-  const ok = await saveTrip();
-  if(ok) showMsg('UPI ID saved for ' + p.name + '.');
+
+  p.upi = upi;
+
+  const ok = await saveGroup();
+
+  if(ok){
+    showMsg(`${p.name}'s UPI ID saved.`);
+    state.upiEditId = null;
+    render();
+  }
 }
+
+function startUpiEdit(id){
+  if(state.isAdmin || state.myParticipantId===id){
+    state.upiEditId = id;
+    render();
+    return;
+  }
+
+  state.claimingId = id;
+  render();
+}
+
+function confirmUpiEdit(id, enteredPin){
+  const p = state.trip.participants.find(p=>p.id===id);
+  if(!p) return;
+
+  if(enteredPin && enteredPin.trim() === p.pin){
+    state.myParticipantId = id;
+    state.upiEditId = id;
+    state.claimingId = null;
+    render();
+  }else{
+    showMsg('Wrong PIN for ' + p.name + '.');
+  }
+}
+
+async function joinMember(name, pin, upi){
+  return addParticipant(name, pin, upi, true);
+}
+
 function addExpense(desc, amount, paidBy, splitIds){
   if(!desc.trim() || !amount || !paidBy || splitIds.length===0) return;
+
   state.trip.expenses.push({
     id: Date.now()+''+Math.random(),
     desc: desc.trim(),
@@ -332,125 +442,363 @@ function addExpense(desc, amount, paidBy, splitIds){
     paidBy,
     split: splitIds
   });
-  saveTrip(); render();
+
+  saveGroup();
+  render();
 }
+
 function removeExpense(id){
-  if(!state.isAdmin){ showMsg('Only the trip creator can remove expenses. Use the admin link.'); return; }
+  if(!state.isAdmin){
+    showMsg('Only the group creator can remove expenses. Use the group creator link.');
+    return;
+  }
+
   state.trip.expenses = state.trip.expenses.filter(e=>e.id!==id);
-  saveTrip(); render();
+  saveGroup();
+  render();
 }
 
 function computeBalances(){
   const bal = {};
+
   state.trip.participants.forEach(p=>bal[p.id]=0);
+
   state.trip.expenses.forEach(e=>{
     const share = e.amount / e.split.length;
+
     bal[e.paidBy] = (bal[e.paidBy]||0) + e.amount;
-    e.split.forEach(id=>{ bal[id] = (bal[id]||0) - share; });
+
+    e.split.forEach(id=>{
+      bal[id] = (bal[id]||0) - share;
+    });
   });
-  // Recorded settlements reduce what's still owed, same as a real payment would.
+
   (state.trip.settlements||[]).forEach(s=>{
     bal[s.from] = (bal[s.from]||0) + s.amount;
     bal[s.to] = (bal[s.to]||0) - s.amount;
   });
+
   return bal;
 }
+
 function markSettled(from, to, amount){
-  const allowed = state.isAdmin || state.myParticipantId===from || state.myParticipantId===to;
+  const allowed =
+    state.isAdmin ||
+    state.myParticipantId===from ||
+    state.myParticipantId===to;
+
   if(!allowed){
-    showMsg('Only ' + nameOf(from) + ' or ' + nameOf(to) + ' can mark this as paid — claim your name in Setup first.');
+    showMsg(
+      'Only ' +
+      nameOf(from) +
+      ' or ' +
+      nameOf(to) +
+      ' can mark this as paid — claim your name in Setup first.'
+    );
     return;
   }
+
   if(!state.trip.settlements) state.trip.settlements = [];
-  state.trip.settlements.push({ id: Date.now()+''+Math.random(), from, to, amount: fmt(amount) });
-  saveTrip(); render();
+
+  state.trip.settlements.push({
+    id: Date.now()+''+Math.random(),
+    from,
+    to,
+    amount: fmt(amount)
+  });
+
+  saveGroup();
+  render();
 }
+
 function undoSettled(id){
-  if(!state.isAdmin){ showMsg('Only the trip creator can undo a settlement. Use the admin link.'); return; }
-  state.trip.settlements = (state.trip.settlements||[]).filter(s=>s.id!==id);
-  saveTrip(); render();
+  if(!state.isAdmin){
+    showMsg('Only the group creator can undo a settlement. Use the group creator link.');
+    return;
+  }
+
+  state.trip.settlements =
+    (state.trip.settlements||[]).filter(s=>s.id!==id);
+
+  saveGroup();
+  render();
 }
+
 function settleUp(){
   const bal = computeBalances();
-  const creditors = [], debtors = [];
+  const creditors = [];
+  const debtors = [];
+
   Object.entries(bal).forEach(([id, amt])=>{
     amt = fmt(amt);
-    if(amt > 0.5) creditors.push({id, amt});
-    else if(amt < -0.5) debtors.push({id, amt: -amt});
+
+    if(amt > 0.5)
+      creditors.push({id, amt});
+    else if(amt < -0.5)
+      debtors.push({id, amt: -amt});
   });
+
   creditors.sort((a,b)=>b.amt-a.amt);
   debtors.sort((a,b)=>b.amt-a.amt);
+
   const txns = [];
   let i=0, j=0;
+
   while(i<debtors.length && j<creditors.length){
-    const pay = Math.min(debtors[i].amt, creditors[j].amt);
-    txns.push({ from: debtors[i].id, to: creditors[j].id, amount: fmt(pay) });
+    const pay = Math.min(
+      debtors[i].amt,
+      creditors[j].amt
+    );
+
+    txns.push({
+      from: debtors[i].id,
+      to: creditors[j].id,
+      amount: fmt(pay)
+    });
+
     debtors[i].amt -= pay;
     creditors[j].amt -= pay;
+
     if(debtors[i].amt < 0.5) i++;
     if(creditors[j].amt < 0.5) j++;
   }
+
   return txns;
 }
+
 function nameOf(id){
   const p = state.trip.participants.find(p=>p.id===id);
   return p ? p.name : '—';
 }
+
 function upiOf(id){
   const p = state.trip.participants.find(p=>p.id===id);
   return p ? p.upi : '';
 }
+
+function myName(){
+  return state.myParticipantId
+    ? nameOf(state.myParticipantId)
+    : '';
+}
+
 function upiLink(toId, amount){
   const upi = upiOf(toId);
   const nm = encodeURIComponent(nameOf(toId));
+
   if(upi){
-    return `upi://pay?pa=${encodeURIComponent(upi)}&pn=${nm}&am=${amount}&cu=INR`;
+    const query =
+      `pa=${encodeURIComponent(upi)}&pn=${nm}&am=${amount}&cu=INR`;
+
+    return `intent://pay?${query}#Intent;scheme=upi;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end`;
   }
+
   return null;
 }
-// iOS (and often Android) won't reliably prompt a chooser for a generic upi:// link —
-// whichever app last registered the scheme just wins silently. Building each app's own
-// scheme means tapping a specific button always opens that specific app, no guessing.
-function upiAppLinks(toId, amount){
-  const upi = upiOf(toId);
-  if(!upi) return null;
-  const pa = encodeURIComponent(upi);
-  const nm = encodeURIComponent(nameOf(toId));
-  const tail = `pa=${pa}&pn=${nm}&am=${amount}&cu=INR`;
-  return {
-    gpay:    `tez://upi/pay?${tail}`,
-    phonepe: `phonepe://pay?${tail}`,
-    paytm:   `paytmmp://pay?${tail}`,
-    generic: `upi://pay?${tail}`
-  };
+
+function squareUpLogoSVG(){
+  return `<img class="app-logo" src="squareup-logo-original-blue-center-transparent.png" alt="SquareUp logo">`;
 }
 
 function render(){
   const root = document.getElementById('app');
+
   if(state.view === 'home'){
     root.innerHTML = `
       <div class="hero">
-        <div class="brand-tag">Trailmark</div>
-        <h1>Split trek costs without the mess.</h1>
-        <p>One link per trip. Log what's spent, see who owes who, pay by UPI.</p>
+        <div class="app-brand" style="justify-content:center;margin-bottom:20px;">
+          ${squareUpLogoSVG()}
+          <div class="app-brand-name">SquareUp</div>
+        </div>
+
+        <h1>Split shared expenses without the mess.</h1>
+
+        <p>
+          One link per group. Log what's spent, see who owes what, pay by UPI.
+        </p>
+
         <div class="card">
-          <label>Start a new trip</label>
+          <label>Start a new group</label>
+
           <div class="row" style="margin-top:8px;">
-            <input id="tripNameInput" placeholder="e.g. Kudremukh, Nov batch" />
-            <button id="createBtn" style="flex:0 0 auto;">Create trip</button>
+            <input id="tripNameInput" placeholder="e.g. Weekend dinner" />
+          </div>
+
+          <div class="row" style="margin-top:8px;">
+            <input
+              id="tripPinInput"
+              placeholder="Set a 4-digit PIN"
+              maxlength="4"
+              inputmode="numeric"
+              style="flex:0 0 150px;"
+            />
+
+            <button id="createBtn" style="flex:0 0 auto;">
+              Create group
+            </button>
+          </div>
+
+          <div class="muted" style="margin-top:6px;">
+            Your group will need this PIN to open the group.
           </div>
         </div>
+
         <div class="card">
-          <label>Already have a trip code?</label>
+          <label>Already have a group code?</label>
+
           <div class="row" style="margin-top:8px;">
-            <input id="codeInput" placeholder="e.g. K7QX2" style="text-transform:uppercase;" />
-            <button class="secondary" id="joinBtn" style="flex:0 0 auto;">Join trip</button>
+            <input
+              id="codeInput"
+              placeholder="e.g. K7QX2"
+              style="text-transform:uppercase;"
+            />
+
+            <button class="secondary" id="joinBtn" style="flex:0 0 auto;">
+              Join group
+            </button>
           </div>
         </div>
       </div>
     `;
-    document.getElementById('createBtn').onclick = ()=>newTrip(document.getElementById('tripNameInput').value);
-    document.getElementById('joinBtn').onclick = ()=>joinTrip(document.getElementById('codeInput').value);
+
+    document.getElementById('createBtn').onclick = ()=>{
+      newGroup(
+        document.getElementById('tripNameInput').value,
+        document.getElementById('tripPinInput').value
+      );
+    };
+
+    document.getElementById('joinBtn').onclick = ()=>{
+      joinGroup(
+        document.getElementById('codeInput').value
+      );
+    };
+
+    return;
+  }
+
+  if(state.view === 'joinMember'){
+    root.innerHTML = `
+      <div class="hero">
+        <div class="app-brand" style="justify-content:center;margin-bottom:20px;">
+          ${squareUpLogoSVG()}
+          <div class="app-brand-name">SquareUp</div>
+        </div>
+
+        <h1>Join ${state.trip.name}</h1>
+
+        <p>
+          Enter your name and create a 4-digit PIN.
+          You can add your UPI ID here without entering the PIN again.
+        </p>
+
+        <div class="card join-card" style="text-align:left;">
+          <label>Your name</label>
+          <input id="joinName" placeholder="Name" autocomplete="name" />
+
+          <label style="margin-top:12px;">
+            Create your 4-digit PIN
+          </label>
+
+          <input
+            id="joinPin"
+            placeholder="4-digit PIN"
+            maxlength="4"
+            inputmode="numeric"
+            type="password"
+          />
+
+          <label style="margin-top:12px;">UPI ID</label>
+
+          <input
+            id="joinUpi"
+            placeholder="name@bank"
+            autocomplete="off"
+          />
+
+          <div class="muted" style="margin-top:6px;">
+            Your PIN protects your participant identity and future UPI changes.
+          </div>
+
+          <button
+            id="joinMemberBtn"
+            style="width:100%;margin-top:14px;"
+          >
+            Join group
+          </button>
+        </div>
+      </div>
+    `;
+
+    const join = ()=>joinMember(
+      document.getElementById('joinName').value,
+      document.getElementById('joinPin').value,
+      document.getElementById('joinUpi').value
+    );
+
+    document.getElementById('joinMemberBtn').onclick = join;
+
+    ['joinName','joinPin','joinUpi'].forEach(id=>{
+      document.getElementById(id).addEventListener(
+        'keydown',
+        e=>{
+          if(e.key==='Enter') join();
+        }
+      );
+    });
+
+    return;
+  }
+
+  if(state.view === 'pinGate'){
+    root.innerHTML = `
+      <div class="hero">
+        <div class="app-brand" style="justify-content:center;margin-bottom:20px;">
+          ${squareUpLogoSVG()}
+          <div class="app-brand-name">SquareUp</div>
+        </div>
+
+        <h1>${state.trip.name}</h1>
+
+        <p>
+          This group is PIN-protected.
+          Enter the 4-digit group PIN to continue.
+        </p>
+
+        <div class="card">
+          <label>Enter PIN</label>
+
+          <div class="row" style="margin-top:8px;">
+            <input
+              id="pinInput"
+              placeholder="••••"
+              maxlength="4"
+              inputmode="numeric"
+              style="text-align:center;letter-spacing:6px;"
+            />
+
+            <button id="pinBtn" style="flex:0 0 auto;">
+              Unlock
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('pinBtn').onclick = ()=>{
+      verifyPin(
+        document.getElementById('pinInput').value
+      );
+    };
+
+    document.getElementById('pinInput').addEventListener(
+      'keydown',
+      e=>{
+        if(e.key==='Enter')
+          verifyPin(e.target.value);
+      }
+    );
+
     return;
   }
 
@@ -458,261 +806,855 @@ function render(){
   const parts = t.participants;
 
   let body = '';
+
   if(state.step === 'setup'){
     body = `
+      ${!state.isAdmin ? `
       <div class="card">
-        <label>Add people on this trek</label>
+        <label>Join as a member</label>
+
+        <div class="row" style="margin-top:8px;">
+          <input id="pSelfName" placeholder="Your name" />
+
+          <input
+            id="pSelfPin"
+            placeholder="4-digit PIN"
+            maxlength="4"
+            inputmode="numeric"
+            type="password"
+            style="flex:0 0 120px;"
+          />
+        </div>
+
+        <div class="row" style="margin-top:8px;">
+          <input
+            id="pSelfUpi"
+            placeholder="UPI ID (optional)"
+          />
+
+          <button
+            id="joinInlineBtn"
+            style="flex:0 0 auto;"
+          >
+            Join
+          </button>
+        </div>
+
+        <div class="muted" style="margin-top:4px;">
+          Your PIN is used once to join and again only if you later need to change your UPI ID.
+        </div>
+      </div>
+      ` : `
+      <div class="card">
+        <label>Add a member</label>
+
         <div class="row" style="margin-top:8px;">
           <input id="pName" placeholder="Name" />
-          <input id="pPin" placeholder="4-digit PIN" maxlength="4" inputmode="numeric" style="flex:0 0 120px;" />
-          <button id="addPBtn" style="flex:0 0 auto;">Add</button>
+
+          <input
+            id="pPin"
+            placeholder="4-digit PIN"
+            maxlength="4"
+            inputmode="numeric"
+            style="flex:0 0 120px;"
+          />
+
+          <button
+            id="addPBtn"
+            style="flex:0 0 auto;"
+          >
+            Add
+          </button>
         </div>
-        <div class="muted" style="margin-top:4px;">Each person sets their own PIN — it's how they'll claim their name below to edit their UPI ID.</div>
-        <div class="pillrow">
-          ${parts.length ? parts.map(p=>`
-            <div class="pill">${p.name}${state.isAdmin?`<button data-rm="${p.id}">✕</button>`:''}</div>
-          `).join('') : '<span class="muted">No one added yet.</span>'}
+
+        <div class="muted" style="margin-top:4px;">
+          Each member uses their PIN to claim their identity and protect their UPI ID.
         </div>
-      </div>
-      ${parts.length ? `
-      <div class="card">
-        <label>UPI IDs — optional, lets people pay with one tap on settle-up</label>
-        ${parts.map(p=>{
-          const canEdit = state.isAdmin || state.myParticipantId===p.id;
-          const claimed = state.myParticipantId===p.id;
-          const isClaiming = state.claimingId === p.id;
-          return `
-          <div class="row" style="margin-bottom:8px;align-items:center;">
-            <div style="flex:0 0 100px;display:flex;align-items:center;font-size:13px;">${p.name}${claimed?' <span style="color:var(--moss);">✓</span>':''}</div>
-            <input data-upi="${p.id}" placeholder="name@bank" value="${p.upi||''}" ${canEdit?'':'disabled'} />
-            ${canEdit ? `<button class="small" data-savupi="${p.id}" style="flex:0 0 auto;">Save</button>` : isClaiming ? `
-              <div class="claim-row">
-                <input data-claimpin="${p.id}" placeholder="PIN" maxlength="4" inputmode="numeric" />
-                <button class="small" data-claimgo="${p.id}" style="flex:0 0 auto;">Go</button>
-                <button class="small secondary" data-claimcancel style="flex:0 0 auto;">✕</button>
-              </div>
-            ` : `<button class="small secondary" data-claimstart="${p.id}" style="flex:0 0 auto;">Claim</button>`}
-          </div>
-        `}).join('')}
-      </div>` : ''}
-    `;
-  } else if(state.step === 'log'){
-    const opts = parts.map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-    body = `
-      ${parts.length < 2 ? `<div class="empty">Add at least two people in Setup before logging expenses.</div>` : `
-      <div class="card">
-        <label>Log an expense</label>
-        <div class="row" style="margin-top:8px;margin-bottom:8px;">
-          <input id="eDesc" placeholder="What was it for" />
-          <input id="eAmt" placeholder="Amount" type="number" style="flex:0 0 110px;" />
-        </div>
-        <label>Paid by</label>
-        <select id="ePaidBy" style="margin-bottom:8px;">${opts}</select>
-        <label>Split between</label>
-        <div class="pillrow" id="splitPills">
-          ${parts.map(p=>`<div class="pill" style="background:var(--paper-2);color:var(--ink);" data-split="${p.id}"><input type="checkbox" checked data-cb="${p.id}" style="width:auto;margin:0;"/> ${p.name}</div>`).join('')}
-        </div>
-        <button id="addEBtn" style="margin-top:8px;">Add expense</button>
       </div>
       `}
+
+      <div class="card">
+        <label>Members</label>
+
+        <div class="pillrow">
+          ${
+            parts.length
+              ? parts.map(p=>`
+                <div class="pill">
+                  ${p.name}
+                  ${
+                    state.isAdmin
+                      ? `<button data-rm="${p.id}">Remove</button>`
+                      : ''
+                  }
+                </div>
+              `).join('')
+              : '<span class="muted">No members yet.</span>'
+          }
+        </div>
+      </div>
+
+      ${
+        parts.length
+          ? `
+      <div class="card">
+        <label>UPI IDs</label>
+
+        ${
+          parts.map(p=>{
+            const isMine = state.myParticipantId===p.id;
+            const isAdminEdit = state.isAdmin;
+            const isClaiming = state.claimingId === p.id;
+
+            return `
+            <div
+              class="row"
+              style="margin-bottom:8px;align-items:center;"
+            >
+              <div
+                style="flex:0 0 100px;display:flex;align-items:center;font-size:13px;"
+              >
+                ${p.name}
+                ${
+                  isMine
+                    ? ' <span class="muted">(you)</span>'
+                    : ''
+                }
+              </div>
+
+              <input
+                data-upi="${p.id}"
+                placeholder="name@bank"
+                value="${p.upi||''}"
+                ${isMine||isAdminEdit?'':'disabled'}
+              />
+
+              ${
+                isMine||isAdminEdit
+                  ? `
+                    <button
+                      class="small"
+                      data-upisave="${p.id}"
+                      style="flex:0 0 auto;"
+                    >
+                      Save
+                    </button>
+                  `
+                  : isClaiming
+                    ? `
+                      <div class="claim-row">
+                        <input
+                          data-claimpin="${p.id}"
+                          placeholder="PIN"
+                          maxlength="4"
+                          inputmode="numeric"
+                          type="password"
+                        />
+
+                        <button
+                          class="small"
+                          data-claimgo="${p.id}"
+                          style="flex:0 0 auto;"
+                        >
+                          Verify
+                        </button>
+
+                        <button
+                          class="small secondary"
+                          data-claimcancel
+                          style="flex:0 0 auto;"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    `
+                    : `
+                      <button
+                        class="small secondary"
+                        data-claimstart="${p.id}"
+                        style="flex:0 0 auto;"
+                      >
+                        Claim
+                      </button>
+                    `
+              }
+            </div>
+            `;
+          }).join('')
+        }
+
+        <div class="muted" style="margin-top:4px;">
+          Only the member who verified the name can edit that member's UPI ID.
+          Changing an existing UPI ID requires that member's PIN.
+        </div>
+      </div>
+      `
+      : ''
+      }
+    `;
+  }
+
+  else if(state.step === 'log'){
+    const opts = parts
+      .map(p=>`<option value="${p.id}">${p.name}</option>`)
+      .join('');
+
+    body = `
+      ${
+        parts.length < 2
+          ? `<div class="empty">Add at least two members before logging expenses.</div>`
+          : `
+      <div class="card">
+        <label>Log an expense</label>
+
+        <div
+          class="row"
+          style="margin-top:8px;margin-bottom:8px;"
+        >
+          <input
+            id="eDesc"
+            placeholder="What was it for"
+          />
+
+          <input
+            id="eAmt"
+            placeholder="Amount"
+            type="number"
+            style="flex:0 0 110px;"
+          />
+        </div>
+
+        <label>Paid by</label>
+
+        <select
+          id="ePaidBy"
+          style="margin-bottom:8px;"
+        >
+          ${opts}
+        </select>
+
+        <label>Split between</label>
+
+        <div class="pillrow" id="splitPills">
+          ${
+            parts.map(p=>`
+              <div
+                class="pill"
+                style="background:var(--paper-2);color:var(--ink);"
+                data-split="${p.id}"
+              >
+                <input
+                  type="checkbox"
+                  checked
+                  data-cb="${p.id}"
+                  style="width:auto;margin:0;"
+                />
+                ${p.name}
+              </div>
+            `).join('')
+          }
+        </div>
+
+        <button
+          id="addEBtn"
+          style="margin-top:8px;"
+        >
+          Add expense
+        </button>
+      </div>
+      `
+      }
+
       <div class="card">
         <label>All expenses</label>
-        ${t.expenses.length===0 ? '<div class="empty">No expenses logged yet.</div>' : t.expenses.slice().reverse().map(e=>`
-          <div class="expense-row">
-            <div>
-              <div class="expense-desc">${e.desc}</div>
-              <div class="expense-meta">${nameOf(e.paidBy)} paid · split ${e.split.length} way${e.split.length>1?'s':''}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:10px;">
-              <div class="expense-amt">${money(e.amount)}</div>
-              ${state.isAdmin?`<button class="small secondary" data-rme="${e.id}">Remove</button>`:''}
-            </div>
-          </div>
-        `).join('')}
+
+        ${
+          t.expenses.length===0
+            ? '<div class="empty">No expenses logged yet.</div>'
+            : t.expenses.slice().reverse().map(e=>`
+              <div class="expense-row">
+                <div>
+                  <div class="expense-desc">${e.desc}</div>
+
+                  <div class="expense-meta">
+                    ${nameOf(e.paidBy)} paid ·
+                    split ${e.split.length} way${e.split.length>1?'s':''}
+                  </div>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div class="expense-amt">
+                    ${money(e.amount)}
+                  </div>
+
+                  ${
+                    state.isAdmin
+                      ? `<button class="small secondary" data-rme="${e.id}">Remove</button>`
+                      : ''
+                  }
+                </div>
+              </div>
+            `).join('')
+        }
       </div>
     `;
-  } else if(state.step === 'settle'){
+  }
+
+  else if(state.step === 'settle'){
     const txns = settleUp();
     const history = (t.settlements||[]).slice().reverse();
+
     body = `
-      ${isInAppBrowser() ? `
+      ${
+        isInAppBrowser()
+          ? `
       <div class="inapp-warn">
-        You're viewing this inside an app's built-in browser (WhatsApp/Instagram/etc.) — that blocks "Pay" from opening your UPI app. Tap the ⋮ menu (or long-press this page's link) and choose <b>Open in Browser</b> for payments to work.
-      </div>` : ''}
-      <div class="card">
-        <label>Settle up — fewest payments to zero everyone out</label>
-        ${txns.length===0 ? `<div class="empty">Everyone's settled. <span class="settled-badge">All square</span></div>` : txns.map(tx=>{
-          const key = `${tx.from}|${tx.to}|${tx.amount}`;
-          const apps = upiAppLinks(tx.to, tx.amount);
-          const isReceiver = state.myParticipantId && state.myParticipantId === tx.to;
-          const isPayer = state.myParticipantId && state.myParticipantId === tx.from;
-          const canMark = state.isAdmin || isPayer || isReceiver;
-          const isPaying = state.payingKey === key;
-          let payAction;
-          if(isReceiver){
-            payAction = `<span class="muted" style="font-size:12px;">Waiting on ${nameOf(tx.from)}</span>`;
-          } else if(apps){
-            payAction = `<button class="small" data-paystart="${key}">Pay</button>`;
-          } else {
-            payAction = `<button class="small secondary" disabled title="Add UPI ID in Setup">Pay</button>`;
-          }
-          const markBtn = canMark
-            ? `<button class="small secondary" data-marksettled="${key}">Mark as paid</button>`
-            : `<span class="muted" style="font-size:11px;" title="Only ${nameOf(tx.from)} or ${nameOf(tx.to)} can confirm this">🔒</span>`;
-          return `
-          <div class="settle-item" style="flex-wrap:wrap;">
-            <div class="who"><span>${nameOf(tx.from)}${isPayer?' <span class="muted">(you)</span>':''}</span> <span class="path"></span> <span class="to">→ ${nameOf(tx.to)}${isReceiver?' <span class="muted">(you)</span>':''}</span></div>
-            <div class="settle-amt">${money(tx.amount)}</div>
-            <div style="display:flex;gap:6px;align-items:center;">
-              ${payAction}
-              ${markBtn}
-            </div>
-            ${isPaying && apps ? `
-            <div style="flex:0 0 100%;display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">
-              <a href="${apps.gpay}"><button class="small secondary">GPay</button></a>
-              <a href="${apps.phonepe}"><button class="small secondary">PhonePe</button></a>
-              <a href="${apps.paytm}"><button class="small secondary">Paytm</button></a>
-              <a href="${apps.generic}"><button class="small secondary">Other UPI app</button></a>
-              <button class="small secondary" data-paycancel style="opacity:0.6;">✕</button>
-            </div>` : ''}
-          </div>
-        `}).join('')}
+        You're viewing this inside an app's built-in browser.
+        Open this page in Chrome or another browser to use UPI payments.
       </div>
-      ${history.length ? `
+      `
+          : ''
+      }
+
+      <div class="card">
+        <label>Balances and payments</label>
+
+        ${
+          txns.length===0
+            ? `
+              <div class="empty">
+                Everyone's settled.
+                <span class="settled-badge">All square</span>
+              </div>
+            `
+            : txns.map(tx=>{
+                const link = upiLink(tx.to, tx.amount);
+
+                const isReceiver =
+                  state.myParticipantId &&
+                  state.myParticipantId === tx.to;
+
+                const isPayer =
+                  state.myParticipantId &&
+                  state.myParticipantId === tx.from;
+
+                const canMark =
+                  state.isAdmin ||
+                  isPayer ||
+                  isReceiver;
+
+                let payAction;
+
+                if(isPayer && link){
+                  payAction = `
+                    <a href="${link}">
+                      <button class="small">Pay</button>
+                    </a>
+                  `;
+                }else if(isReceiver){
+                  payAction = `
+                    <span
+                      class="muted"
+                      style="font-size:12px;"
+                    >
+                      Receiving
+                    </span>
+                  `;
+                }else{
+                  payAction = '';
+                }
+
+                const markBtn = canMark
+                  ? `
+                    <button
+                      class="small secondary"
+                      data-marksettled="${tx.from}|${tx.to}|${tx.amount}"
+                    >
+                      Mark as paid
+                    </button>
+                  `
+                  : `
+                    <span
+                      class="muted"
+                      style="font-size:11px;"
+                      title="Only ${nameOf(tx.from)} or ${nameOf(tx.to)} can confirm this"
+                    ></span>
+                  `;
+
+                return `
+                  <div class="settle-item">
+                    <div class="who">
+                      <span>
+                        ${nameOf(tx.from)}
+                        ${
+                          isPayer
+                            ? ' <span class="muted">(you)</span>'
+                            : ''
+                        }
+                      </span>
+
+                      <span class="path"></span>
+
+                      <span class="to">
+                        → ${nameOf(tx.to)}
+                        ${
+                          isReceiver
+                            ? ' <span class="muted">(you)</span>'
+                            : ''
+                        }
+                      </span>
+                    </div>
+
+                    <div class="settle-amt">
+                      ${money(tx.amount)}
+                    </div>
+
+                    <div
+                      style="display:flex;gap:6px;align-items:center;"
+                    >
+                      ${payAction}
+                      ${markBtn}
+                    </div>
+                  </div>
+                `;
+              }).join('')
+        }
+      </div>
+
+      ${
+        history.length
+          ? `
       <div class="card">
         <label>Payment history</label>
-        ${history.map(s=>`
-          <div class="expense-row">
-            <div>
-              <div class="expense-desc">${nameOf(s.from)} → ${nameOf(s.to)}</div>
-              <div class="expense-meta">marked as paid</div>
+
+        ${
+          history.map(s=>`
+            <div class="expense-row">
+              <div>
+                <div class="expense-desc">
+                  ${nameOf(s.from)} → ${nameOf(s.to)}
+                </div>
+
+                <div class="expense-meta">
+                  marked as paid
+                </div>
+              </div>
+
+              <div
+                style="display:flex;align-items:center;gap:10px;"
+              >
+                <div class="expense-amt">
+                  ${money(s.amount)}
+                </div>
+
+                ${
+                  state.isAdmin
+                    ? `<button class="small secondary" data-undosettled="${s.id}">Undo</button>`
+                    : ''
+                }
+              </div>
             </div>
-            <div style="display:flex;align-items:center;gap:10px;">
-              <div class="expense-amt">${money(s.amount)}</div>
-              ${state.isAdmin?`<button class="small secondary" data-undosettled="${s.id}">Undo</button>`:''}
-            </div>
-          </div>
-        `).join('')}
-      </div>` : ''}
+          `).join('')
+        }
+      </div>
+      `
+          : ''
+      }
     `;
   }
 
   root.innerHTML = `
-    <div class="brand">
-      <div>
-        <h1 class="brand-name">${t.name}</h1>
-        <div class="brand-tag">Trailmark</div>
-        ${state.myParticipantId ? `<div class="whoami">Hi, ${nameOf(state.myParticipantId)} 👋</div>` : state.isAdmin ? `<div class="whoami">Viewing as trip creator</div>` : ''}
+    <div class="group-header">
+      <div class="group-title">${t.name}</div>
+
+      <div class="group-brand">
+        ${squareUpLogoSVG()}
+        <span class="app-brand-name">SquareUp</span>
       </div>
-      <button class="secondary small" id="shareBtn">Copy trip link</button>
+
+      <div class="viewing-as">
+        ${
+          state.isAdmin
+            ? 'Viewing as group creator'
+            : (
+              myName()
+                ? `Viewing as ${myName()}`
+                : 'Viewing as member'
+            )
+        }
+      </div>
+
+      <button
+        class="secondary small"
+        id="shareBtn"
+        style="position:absolute;right:0;top:0;"
+      >
+        Copy group link
+      </button>
     </div>
-    <div class="contour">${contourSVG()}</div>
-    <div class="code-box">Trip code <b>${state.code}</b> · share the link so others can join</div>
-    ${state.isAdmin ? `
+
+    <div class="contour">
+      ${contourSVG()}
+    </div>
+
+    <div class="code-box">
+      Group code <b>${state.code}</b>
+      · Group PIN <b>${t.pin || '—'}</b>
+      · share the code so others can join
+    </div>
+
+    ${
+      state.isAdmin
+        ? `
     <div class="admin-box">
-      You're the trip creator <button id="copyAdminBtn">Copy admin link</button>
-      <span class="lock">This link can delete stuff — don't share it with the group.</span>
-    </div>` : ''}
-    <div class="steps">
-      <div class="step ${state.step==='setup'?'active':''}" data-step="setup"><div class="num">1</div><div class="label">Setup</div></div>
-      <div class="step ${state.step==='log'?'active':''}" data-step="log"><div class="num">2</div><div class="label">Log</div></div>
-      <div class="step ${state.step==='settle'?'active':''}" data-step="settle"><div class="num">3</div><div class="label">Settle up</div></div>
+      You're the group creator
+
+      <button id="copyAdminBtn">
+        Copy admin link
+      </button>
+
+      <span class="lock">
+        This link can delete stuff — don't share it with the group.
+      </span>
     </div>
+    `
+        : ''
+    }
+
+    <div class="steps">
+      <div
+        class="step ${state.step==='setup'?'active':''}"
+        data-step="setup"
+      >
+        <div class="num">1</div>
+        <div class="label">Setup</div>
+      </div>
+
+      <div
+        class="step ${state.step==='log'?'active':''}"
+        data-step="log"
+      >
+        <div class="num">2</div>
+        <div class="label">Log</div>
+      </div>
+
+      <div
+        class="step ${state.step==='settle'?'active':''}"
+        data-step="settle"
+      >
+        <div class="num">3</div>
+        <div class="label">Settle up</div>
+      </div>
+    </div>
+
     ${body}
   `;
 
   document.querySelectorAll('.step').forEach(el=>{
-    el.onclick = ()=>{ state.step = el.getAttribute('data-step'); render(); };
+    el.onclick = ()=>{
+      state.step = el.getAttribute('data-step');
+      render();
+    };
   });
+
   document.getElementById('shareBtn').onclick = ()=>{
-    navigator.clipboard.writeText(shareLink()).catch(()=>{});
+    navigator.clipboard
+      .writeText(shareLink())
+      .catch(()=>{});
+
     const btn = document.getElementById('shareBtn');
+
     btn.textContent = 'Copied';
-    setTimeout(()=>{ btn.textContent = 'Copy trip link'; }, 1500);
+
+    setTimeout(()=>{
+      btn.textContent = 'Copy group link';
+    },1500);
   };
+
   if(state.isAdmin){
     const cab = document.getElementById('copyAdminBtn');
-    if(cab) cab.onclick = ()=>{
-      navigator.clipboard.writeText(adminLink()).catch(()=>{});
-      cab.textContent = 'Copied';
-      setTimeout(()=>{ cab.textContent = 'Copy admin link'; }, 1500);
-    };
+
+    if(cab){
+      cab.onclick = ()=>{
+        navigator.clipboard
+          .writeText(adminLink())
+          .catch(()=>{});
+
+        cab.textContent = 'Copied';
+
+        setTimeout(()=>{
+          cab.textContent = 'Copy admin link';
+        },1500);
+      };
+    }
   }
 
   if(state.step==='setup'){
-    document.getElementById('addPBtn').onclick = ()=>{
-      addParticipant(document.getElementById('pName').value, document.getElementById('pPin').value);
-    };
-    document.getElementById('pName').addEventListener('keydown', e=>{
-      if(e.key==='Enter') addParticipant(e.target.value, document.getElementById('pPin').value);
-    });
+    const addPBtn = document.getElementById('addPBtn');
+
+    if(addPBtn){
+      addPBtn.onclick = ()=>{
+        addParticipant(
+          document.getElementById('pName').value,
+          document.getElementById('pPin').value,
+          '',
+          false
+        );
+      };
+
+      document.getElementById('pName').addEventListener(
+        'keydown',
+        e=>{
+          if(e.key==='Enter'){
+            addParticipant(
+              e.target.value,
+              document.getElementById('pPin').value,
+              '',
+              false
+            );
+          }
+        }
+      );
+    }
+
+    const joinInlineBtn =
+      document.getElementById('joinInlineBtn');
+
+    if(joinInlineBtn){
+      const doJoin = ()=>{
+        addParticipant(
+          document.getElementById('pSelfName').value,
+          document.getElementById('pSelfPin').value,
+          document.getElementById('pSelfUpi').value
+        );
+      };
+
+      joinInlineBtn.onclick = doJoin;
+
+      ['pSelfName','pSelfPin','pSelfUpi'].forEach(id=>{
+        document.getElementById(id).addEventListener(
+          'keydown',
+          e=>{
+            if(e.key==='Enter') doJoin();
+          }
+        );
+      });
+    }
+
     document.querySelectorAll('[data-rm]').forEach(el=>{
-      el.onclick = ()=>removeParticipant(el.getAttribute('data-rm'));
-    });
-    document.querySelectorAll('[data-savupi]').forEach(el=>{
-      const id = el.getAttribute('data-savupi');
       el.onclick = ()=>{
-        const inputEl = document.querySelector(`[data-upi="${id}"]`);
-        setUpi(id, inputEl ? inputEl.value : '');
+        removeParticipant(
+          el.getAttribute('data-rm')
+        );
       };
     });
-    document.querySelectorAll('[data-upi]').forEach(el=>{
-      el.addEventListener('keydown', e=>{
-        if(e.key==='Enter') setUpi(el.getAttribute('data-upi'), e.target.value);
-      });
+
+    document.querySelectorAll('[data-upisave]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-upisave');
+
+        const input =
+          document.querySelector(`[data-upi="${id}"]`);
+
+        setUpi(
+          id,
+          input ? input.value : ''
+        );
+      };
     });
+
     document.querySelectorAll('[data-claimstart]').forEach(el=>{
-      el.onclick = ()=>startClaim(el.getAttribute('data-claimstart'));
-    });
-    document.querySelectorAll('[data-claimcancel]').forEach(el=>{
-      el.onclick = ()=>cancelClaim();
-    });
-    document.querySelectorAll('[data-claimgo]').forEach(el=>{
-      const id = el.getAttribute('data-claimgo');
       el.onclick = ()=>{
-        const pinEl = document.querySelector(`[data-claimpin="${id}"]`);
-        confirmClaim(id, pinEl ? pinEl.value : '');
+        startClaim(
+          el.getAttribute('data-claimstart')
+        );
       };
     });
+
+    document.querySelectorAll('[data-claimcancel]').forEach(el=>{
+      el.onclick = ()=>{
+        cancelClaim();
+      };
+    });
+
+    document.querySelectorAll('[data-claimgo]').forEach(el=>{
+      const id =
+        el.getAttribute('data-claimgo');
+
+      el.onclick = ()=>{
+        const pinEl =
+          document.querySelector(
+            `[data-claimpin="${id}"]`
+          );
+
+        confirmClaim(
+          id,
+          pinEl ? pinEl.value : ''
+        );
+      };
+    });
+
     document.querySelectorAll('[data-claimpin]').forEach(el=>{
-      el.addEventListener('keydown', e=>{
-        if(e.key==='Enter') confirmClaim(el.getAttribute('data-claimpin'), e.target.value);
-      });
+      el.addEventListener(
+        'keydown',
+        e=>{
+          if(e.key==='Enter'){
+            confirmClaim(
+              el.getAttribute('data-claimpin'),
+              e.target.value
+            );
+          }
+        }
+      );
     });
   }
+
   if(state.step==='log' && parts.length>=2){
     document.getElementById('addEBtn').onclick = ()=>{
-      const desc = document.getElementById('eDesc').value;
-      const amt = document.getElementById('eAmt').value;
-      const paidBy = document.getElementById('ePaidBy').value;
-      const splitIds = Array.from(document.querySelectorAll('[data-cb]:checked')).map(cb=>cb.getAttribute('data-cb'));
-      addExpense(desc, amt, paidBy, splitIds);
+      const desc =
+        document.getElementById('eDesc').value;
+
+      const amt =
+        document.getElementById('eAmt').value;
+
+      const paidBy =
+        document.getElementById('ePaidBy').value;
+
+      const splitIds =
+        Array.from(
+          document.querySelectorAll('[data-cb]:checked')
+        ).map(
+          cb=>cb.getAttribute('data-cb')
+        );
+
+      addExpense(
+        desc,
+        amt,
+        paidBy,
+        splitIds
+      );
     };
   }
+
   if(state.step==='log'){
     document.querySelectorAll('[data-rme]').forEach(el=>{
-      el.onclick = ()=>removeExpense(el.getAttribute('data-rme'));
+      el.onclick = ()=>{
+        removeExpense(
+          el.getAttribute('data-rme')
+        );
+      };
     });
   }
+
   if(state.step==='settle'){
     document.querySelectorAll('[data-marksettled]').forEach(el=>{
       el.onclick = ()=>{
-        const [from, to, amount] = el.getAttribute('data-marksettled').split('|');
-        markSettled(from, to, parseFloat(amount));
+        const [
+          from,
+          to,
+          amount
+        ] = el
+          .getAttribute('data-marksettled')
+          .split('|');
+
+        markSettled(
+          from,
+          to,
+          parseFloat(amount)
+        );
       };
     });
+
     document.querySelectorAll('[data-undosettled]').forEach(el=>{
-      el.onclick = ()=>undoSettled(el.getAttribute('data-undosettled'));
-    });
-    document.querySelectorAll('[data-paystart]').forEach(el=>{
-      el.onclick = ()=>{ state.payingKey = el.getAttribute('data-paystart'); render(); };
-    });
-    document.querySelectorAll('[data-paycancel]').forEach(el=>{
-      el.onclick = ()=>{ state.payingKey = null; render(); };
+      el.onclick = ()=>{
+        undoSettled(
+          el.getAttribute('data-undosettled')
+        );
+      };
     });
   }
 }
 
+async function removeParticipant(id){
+  if(!state.isAdmin){
+    showMsg(
+      'Only the group creator can remove members.'
+    );
+    return;
+  }
+
+  state.trip.participants =
+    state.trip.participants.filter(
+      p=>p.id!==id
+    );
+
+  state.trip.expenses =
+    state.trip.expenses.map(e=>({
+      ...e,
+      split:e.split.filter(
+        pid=>pid!==id
+      ),
+      paidBy:e.paidBy===id
+        ? ''
+        : e.paidBy
+    })).filter(e=>
+      e.paidBy &&
+      e.split.length
+    );
+
+  if(state.myParticipantId===id){
+    state.myParticipantId=null;
+  }
+
+  await saveGroup();
+  render();
+}
+
+function startPolling(){
+  setInterval(async ()=>{
+    if(!state.code) return;
+
+    const fresh = await loadGroup(
+      state.code
+    );
+
+    if(!fresh) return;
+
+    const currentMyId =
+      state.myParticipantId;
+
+    const currentStep =
+      state.step;
+
+    const currentView =
+      state.view;
+
+    const currentClaim =
+      state.claimingId;
+
+    const currentUpiEdit =
+      state.upiEditId;
+
+    state.trip = fresh;
+
+    state.myParticipantId =
+      currentMyId &&
+      fresh.participants.some(
+        p=>p.id===currentMyId
+      )
+        ? currentMyId
+        : null;
+
+    state.step = currentStep;
+    state.view = currentView;
+    state.claimingId = currentClaim;
+    state.upiEditId = currentUpiEdit;
+
+    render();
+  },500);
+}
+
+startPolling();
 init();
 </script>
 </body>
